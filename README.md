@@ -23,7 +23,7 @@ A maven plugin to publish the project artifacts to sonatype central.
 
 ### Authentication
 
-To configure authentication, add your credentials to the `~/.m2/settings.xml` file.
+To configure authentication, add your credentials to the `~/.m2/settings.xml` file:
 
 ```xml
 <settings>
@@ -37,7 +37,7 @@ To configure authentication, add your credentials to the `~/.m2/settings.xml` fi
 </settings>
 ```
 
-Alternatively, you can specify your credentials directly in the `<configuration>` section of your plugin.
+Alternatively, you can specify your credentials directly in the `<configuration>` section of the `sonatype-central-publish-maven-plugin`:
 
 ```xml
 <configuration>
@@ -48,13 +48,15 @@ Alternatively, you can specify your credentials directly in the `<configuration>
 
 ### Skip Deployment
 
-To skip the deployment process, set the `skip` configuration to `true` in the `<configuration>` section of your plugin:
+To skip the deployment process, set the `<skip>` configuration to `true` in the `<configuration>` section of the `sonatype-central-publish-maven-plugin`:
 
 ```xml
 <configuration>
   <skip>true</skip>
 </configuration>
 ```
+
+Alternatively, the `sonatype-central-publish-maven-plugin` can also use the `<skip>true</skip>` configuration from the `maven-deploy-plugin` to skip deployment.
 
 ## Publish your project artifacts
 

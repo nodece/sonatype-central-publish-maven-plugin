@@ -61,9 +61,11 @@ public class HookDeployLifecycleParticipant extends AbstractMavenLifecyclePartic
 
     @Override
     public void afterProjectsRead(MavenSession session) throws MavenExecutionException {
+        logger.debug("Hooking deploy lifecycle participant");
         for (MavenProject project : session.getProjects()) {
             Build build = project.getModel().getBuild();
             if (build == null) {
+                logger.debug("build is null for " + project.getId());
                 continue;
             }
 

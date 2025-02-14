@@ -2,10 +2,10 @@
  * SPDX-FileCopyrightText: Copyright 2025 the original author or authors.
  * SPDX-License-Identifier: Apache-2.0
  */
-package com.github.nodece.sonatype.central.publish.plugin;
+package io.github.nodece.sonatype.central.publish.plugin;
 
-import static com.github.nodece.sonatype.central.publish.plugin.Constants.PLUGIN_ARTIFACT_ID;
-import static com.github.nodece.sonatype.central.publish.plugin.Constants.PLUGIN_GROUP_ID;
+import static io.github.nodece.sonatype.central.publish.plugin.Constants.PLUGIN_ARTIFACT_ID;
+import static io.github.nodece.sonatype.central.publish.plugin.Constants.PLUGIN_GROUP_ID;
 
 import java.util.List;
 import javax.inject.Named;

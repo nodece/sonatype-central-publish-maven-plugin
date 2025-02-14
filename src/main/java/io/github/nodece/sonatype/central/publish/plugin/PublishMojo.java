@@ -2,15 +2,15 @@
  * SPDX-FileCopyrightText: Copyright 2025 the original author or authors.
  * SPDX-License-Identifier: Apache-2.0
  */
-package com.github.nodece.sonatype.central.publish.plugin;
+package io.github.nodece.sonatype.central.publish.plugin;
 
-import static com.github.nodece.sonatype.central.publish.plugin.Constants.PLUGIN_NOTATION;
+import static io.github.nodece.sonatype.central.publish.plugin.Constants.PLUGIN_NOTATION;
 import static org.apache.maven.plugins.annotations.LifecyclePhase.DEPLOY;
 
-import com.github.nodece.sonatype.central.publish.client.api.Publisher;
-import com.github.nodece.sonatype.central.publish.client.api.PublisherConfig;
-import com.github.nodece.sonatype.central.publish.client.api.PublishingType;
-import com.github.nodece.sonatype.central.publish.client.internal.DefaultPublisher;
+import io.github.nodece.sonatype.central.publish.client.api.Publisher;
+import io.github.nodece.sonatype.central.publish.client.api.PublisherConfig;
+import io.github.nodece.sonatype.central.publish.client.api.PublishingType;
+import io.github.nodece.sonatype.central.publish.client.internal.DefaultPublisher;
 import java.io.File;
 import java.io.FileInputStream;
 import java.net.URI;

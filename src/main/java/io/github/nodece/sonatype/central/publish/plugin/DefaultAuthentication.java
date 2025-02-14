@@ -2,9 +2,9 @@
  * SPDX-FileCopyrightText: Copyright 2025 the original author or authors.
  * SPDX-License-Identifier: Apache-2.0
  */
-package com.github.nodece.sonatype.central.publish.plugin;
+package io.github.nodece.sonatype.central.publish.plugin;
 
-import com.github.nodece.sonatype.central.publish.client.api.Authentication;
+import io.github.nodece.sonatype.central.publish.client.api.Authentication;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;

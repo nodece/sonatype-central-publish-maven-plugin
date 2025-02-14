@@ -2,7 +2,7 @@
  * SPDX-FileCopyrightText: Copyright 2025 the original author or authors.
  * SPDX-License-Identifier: Apache-2.0
  */
-package com.github.nodece.sonatype.central.publish.plugin;
+package io.github.nodece.sonatype.central.publish.plugin;
 
 import static org.apache.commons.codec.digest.DigestUtils.md5Hex;
 import static org.apache.commons.codec.digest.DigestUtils.sha1Hex;

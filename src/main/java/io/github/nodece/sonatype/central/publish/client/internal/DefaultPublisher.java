@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -79,6 +80,9 @@ public class DefaultPublisher implements Publisher {
     public CompletableFuture<Void> initialize(PublisherConfig config) {
         Builder builder = new Builder();
         builder.setMaxConnections(1);
+        builder.setConnectTimeout(Duration.ofMinutes(1));
+        builder.setRequestTimeout(Duration.ofMinutes(30));
+        builder.setReadTimeout(Duration.ofMinutes(30));
         asyncHttpClient = new DefaultAsyncHttpClient(builder.build());
         publisherConfig = config;
         return CompletableFuture.completedFuture(null);

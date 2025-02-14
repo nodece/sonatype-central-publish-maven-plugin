@@ -10,7 +10,7 @@
 
   <groupId>io.github.nodece</groupId>
   <artifactId>sonatype-central-publish-maven-plugin</artifactId>
-  <version>0.0.1-SNAPSHOT</version>
+  <version>0.0.1-202502141658</version>
 
   <packaging>maven-plugin</packaging>
 

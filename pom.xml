@@ -7,6 +7,7 @@
 
   <name>sonatype-central-publish-maven-plugin</name>
   <description>Publish the project artifacts to the sonatype central.</description>
+  <url>https://github.com/nodece/sonatype-central-publish-maven-plugin</url>
 
   <groupId>io.github.nodece</groupId>
   <artifactId>sonatype-central-publish-maven-plugin</artifactId>

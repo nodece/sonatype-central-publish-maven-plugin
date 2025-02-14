@@ -1,5 +1,8 @@
 # sonatype-central-publish-maven-plugin
 
+[![CI](https://github.com/nodece/sonatype-central-publish-maven-plugin/actions/workflows/main.yml/badge.svg)](https://github.com/nodece/sonatype-central-publish-maven-plugin/actions/workflows/main.yml)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.nodece/sonatype-central-publish-maven-plugin?label=Maven%20Central)](https://search.maven.org/artifact/io.github.nodece/sonatype-central-publish-maven-plugin)
+
 A maven plugin to publish the project artifacts to sonatype central.
 
 ## Usage

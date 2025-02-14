@@ -66,6 +66,6 @@ mvn deploy
 
 Note: This command will only upload the artifacts to sonatype central and does not verify the deployment.
 
-### Limitations
+## Limitations
 
 - SNAPSHOT is not supported.

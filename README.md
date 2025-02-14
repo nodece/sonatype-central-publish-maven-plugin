@@ -58,7 +58,7 @@ To skip the deployment process, set the `<skip>` configuration to `true` in the 
 
 Alternatively, the `sonatype-central-publish-maven-plugin` can also use the `<skip>true</skip>` configuration from the `maven-deploy-plugin` to skip deployment.
 
-## Publish your project artifacts
+### Publish your project artifacts
 
 ```shell
 mvn deploy

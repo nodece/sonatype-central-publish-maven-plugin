@@ -129,16 +129,18 @@ public class PublishMojo extends AbstractMojo {
         List<MavenProject> projects = findProjectsWithPlugin();
         if (areAllProjectsMarked(projects)) {
             try {
-                Path tempDirectory = Files.createTempDirectory("sonatype-central-publisher-maven-plugin");
+                Path outputDirectory = Files.createTempDirectory(Paths.get(session.getTopLevelProject().getBuild().getDirectory()),
+                        "sonatype-central-publisher-maven-plugin");
+                log.info("Output directory: {}", outputDirectory);
                 List<MavenProject> pendingProjects =
                         projects.stream().filter(this::hasPendingPublishState).collect(Collectors.toList());
                 InstallRequest request = new InstallRequest();
                 for (MavenProject project : pendingProjects) {
                     getAllArtifacts(project).forEach(request::addArtifact);
                 }
-                RepositorySystemSession stagingRepositorySession = createStagingRepositorySession(tempDirectory);
+                RepositorySystemSession stagingRepositorySession = createStagingRepositorySession(outputDirectory);
                 repositorySystem.install(stagingRepositorySession, request);
-                Path bundlePath = Paths.get(tempDirectory.toString(), "bundle.zip");
+                Path bundlePath = Paths.get(outputDirectory.toString(), "bundle.zip");
                 ZipBundle.install(stagingRepositorySession, bundlePath);
                 log.info(
                         "Bundle {} created successfully, size: {}",

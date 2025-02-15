@@ -4,6 +4,8 @@
  */
 package io.github.nodece.sonatype.central.publish.plugin;
 
+import static io.github.nodece.sonatype.central.publish.plugin.Constants.CENTRAL_REPOSITORY_URL;
+import static io.github.nodece.sonatype.central.publish.plugin.Constants.CENTRAL_SNAPSHOT_REPOSITORY_URL;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.PLUGIN_NOTATION;
 import static org.apache.maven.plugins.annotations.LifecyclePhase.DEPLOY;
 
@@ -23,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -40,10 +43,14 @@ import org.apache.maven.project.artifact.ProjectArtifact;
 import org.eclipse.aether.DefaultRepositorySystemSession;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
+import org.eclipse.aether.deployment.DeployRequest;
 import org.eclipse.aether.installation.InstallRequest;
+import org.eclipse.aether.installation.InstallationException;
 import org.eclipse.aether.internal.impl.SimpleLocalRepositoryManagerFactory;
 import org.eclipse.aether.repository.LocalRepository;
 import org.eclipse.aether.repository.NoLocalRepositoryManagerException;
+import org.eclipse.aether.repository.RemoteRepository;
+import org.eclipse.aether.repository.RemoteRepository.Builder;
 import org.eclipse.aether.spi.localrepo.LocalRepositoryManagerFactory;
 import org.eclipse.aether.util.artifact.ArtifactIdUtils;
 
@@ -77,6 +84,9 @@ public class PublishMojo extends AbstractMojo {
 
     @Parameter(name = "url")
     private URI uri;
+
+    @Parameter(name = "snapshotUrl")
+    private URI snapshotUri;
 
     @Parameter(name = "deploymentName")
     private String deploymentName;
@@ -117,6 +127,40 @@ public class PublishMojo extends AbstractMojo {
         return repositorySystemSession;
     }
 
+    private RemoteRepository createRemoteRepository(String url) {
+        Builder builder = new Builder(serverId, "default", url);
+        builder.setAuthentication(
+                session.getRepositorySession().getAuthenticationSelector().getAuthentication(builder.build()));
+        return builder.build();
+    }
+
+    private URI getRepositoryUri(boolean isSnapshot) {
+        URI repoUri;
+        if (isSnapshot) {
+            repoUri = uri;
+        } else {
+            repoUri = snapshotUri;
+        }
+        if (repoUri == null) {
+            repoUri = isSnapshot ? URI.create(CENTRAL_SNAPSHOT_REPOSITORY_URL) : URI.create(CENTRAL_REPOSITORY_URL);
+        }
+        return repoUri;
+    }
+
+    private RemoteRepository getSnapRemoteRepository() {
+        return createRemoteRepository(getRepositoryUri(true).toString());
+    }
+
+    private boolean installArtifacts(InstallRequest installRequest, RepositorySystemSession repositorySession)
+            throws InstallationException {
+        if (installRequest.getArtifacts().isEmpty()) {
+            log.info("No artifacts to install");
+            return false;
+        }
+        repositorySystem.install(repositorySession, installRequest);
+        return true;
+    }
+
     @Override
     public void execute() throws MojoExecutionException {
         PublishState publishState;
@@ -127,73 +171,97 @@ public class PublishMojo extends AbstractMojo {
         }
         putPublishState(session.getCurrentProject(), publishState);
         List<MavenProject> projects = findProjectsWithPlugin();
-        if (areAllProjectsMarked(projects)) {
-            try {
-                Path outputDirectory = Files.createTempDirectory(Paths.get(session.getTopLevelProject().getBuild().getDirectory()),
-                        "sonatype-central-publisher-maven-plugin");
-                log.info("Output directory: {}", outputDirectory);
-                List<MavenProject> pendingProjects =
-                        projects.stream().filter(this::hasPendingPublishState).collect(Collectors.toList());
-                InstallRequest request = new InstallRequest();
-                for (MavenProject project : pendingProjects) {
-                    getAllArtifacts(project).forEach(request::addArtifact);
-                }
-                RepositorySystemSession stagingRepositorySession = createStagingRepositorySession(outputDirectory);
-                repositorySystem.install(stagingRepositorySession, request);
-                Path bundlePath = Paths.get(outputDirectory.toString(), "bundle.zip");
-                ZipBundle.install(stagingRepositorySession, bundlePath);
-                log.info(
-                        "Bundle {} created successfully, size: {}",
-                        bundlePath,
-                        FileUtils.byteCountToDisplaySize(Files.size(bundlePath)));
-                Publisher publisher = new DefaultPublisher();
-                PublisherConfig publisherConfig = PublisherConfig.builder()
-                        .authentication(DefaultAuthentication.create(
-                                session.getSettings().getServer(serverId), username, password, token))
-                        .build();
-                if (log.isDebugEnabled()) {
-                    log.debug("Publisher config: {}", publisherConfig);
-                }
-                log.info("Initializing publisher with url: {}", publisherConfig.getUri());
-                publisher
-                        .initialize(publisherConfig)
-                        .thenCompose(__ -> {
-                            FileInputStream fileInputStream;
-                            try {
-                                fileInputStream = FileUtils.openInputStream(bundlePath.toFile());
-                                String finalDeploymentName;
-                                if (deploymentName == null) {
-                                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
-                                    finalDeploymentName =
-                                            "Deployment-" + LocalDateTime.now().format(formatter);
-                                } else {
-                                    finalDeploymentName = deploymentName;
-                                }
-                                log.info(
-                                        "Uploading {} with deployment name: {}, publishing type: {}",
-                                        bundlePath,
-                                        finalDeploymentName,
-                                        publishingType);
-                                return publisher
-                                        .upload(
-                                                finalDeploymentName,
-                                                publishingType,
-                                                bundlePath.getFileName().toString(),
-                                                fileInputStream)
-                                        .whenComplete((id, throwable) -> {
-                                            if (throwable != null) {
-                                                throw new CompletionException(throwable);
-                                            }
-                                            log.info("Upload completed with deployment id: {}", id);
-                                        });
-                            } catch (Exception e) {
-                                throw new CompletionException(e);
-                            }
-                        })
-                        .join();
-            } catch (Exception e) {
-                throw new MojoExecutionException(e);
+        if (!areAllProjectsMarked(projects)) {
+            return;
+        }
+        try {
+            Path outputDirectory = Files.createTempDirectory(
+                    Paths.get(session.getTopLevelProject().getBuild().getDirectory()),
+                    "sonatype-central-publisher-maven-plugin-");
+            log.info("Output directory: {}", outputDirectory);
+            List<MavenProject> pendingProjects =
+                    projects.stream().filter(this::hasPendingPublishState).collect(Collectors.toList());
+            InstallRequest releaseInstallRequest = new InstallRequest();
+            InstallRequest snapshotInstallRequest = new InstallRequest();
+            for (MavenProject project : pendingProjects) {
+                getAllArtifacts(project).forEach(n -> {
+                    if (n.isSnapshot()) {
+                        snapshotInstallRequest.addArtifact(n);
+                    } else {
+                        releaseInstallRequest.addArtifact(n);
+                    }
+                });
             }
+
+            if (!snapshotInstallRequest.getArtifacts().isEmpty()) {
+                DeployRequest deployRequest = new DeployRequest();
+                snapshotInstallRequest.getArtifacts().forEach(deployRequest::addArtifact);
+                deployRequest.setRepository(getSnapRemoteRepository());
+                Exception exception = deploySnapshot(session.getRepositorySession(), deployRequest);
+                if (exception != null) {
+                    throw exception;
+                }
+            }
+
+            if (!releaseInstallRequest.getArtifacts().isEmpty()) {
+                Path bundlePath = Paths.get(outputDirectory.toString(), "bundle.zip");
+                RepositorySystemSession stagingRepositorySession = createStagingRepositorySession(outputDirectory);
+                if (installArtifacts(releaseInstallRequest, stagingRepositorySession)) {
+                    ZipBundle.install(stagingRepositorySession, bundlePath);
+                    log.info(
+                            "Bundle {} created successfully, size: {}",
+                            bundlePath,
+                            FileUtils.byteCountToDisplaySize(Files.size(bundlePath)));
+                    Publisher publisher = new DefaultPublisher();
+                    PublisherConfig publisherConfig = PublisherConfig.builder()
+                            .uri(getRepositoryUri(false))
+                            .authentication(DefaultAuthentication.create(
+                                    session.getSettings().getServer(serverId), username, password, token))
+                            .build();
+                    if (log.isDebugEnabled()) {
+                        log.debug("Publisher config: {}", publisherConfig);
+                    }
+                    log.info("Initializing publisher with url: {}", publisherConfig.getUri());
+                    publisher
+                            .initialize(publisherConfig)
+                            .thenCompose(__ -> {
+                                FileInputStream fileInputStream;
+                                try {
+                                    fileInputStream = FileUtils.openInputStream(bundlePath.toFile());
+                                    String finalDeploymentName;
+                                    if (deploymentName == null) {
+                                        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+                                        finalDeploymentName = "Deployment-"
+                                                + LocalDateTime.now().format(formatter);
+                                    } else {
+                                        finalDeploymentName = deploymentName;
+                                    }
+                                    log.info(
+                                            "Uploading {} with deployment name: {}, publishing type: {}",
+                                            bundlePath,
+                                            finalDeploymentName,
+                                            publishingType);
+                                    return publisher
+                                            .upload(
+                                                    finalDeploymentName,
+                                                    publishingType,
+                                                    bundlePath.getFileName().toString(),
+                                                    fileInputStream)
+                                            .whenComplete((id, throwable) -> {
+                                                if (throwable != null) {
+                                                    throw new CompletionException(throwable);
+                                                }
+                                                log.info("Upload completed with deployment id: {}", id);
+                                            });
+                                } catch (Exception e) {
+                                    throw new CompletionException(e);
+                                }
+                            })
+                            .join();
+                }
+            }
+        } catch (Exception e) {
+            throw new MojoExecutionException(e);
         }
     }
 
@@ -221,5 +289,21 @@ public class PublishMojo extends AbstractMojo {
         }
         project.getAttachedArtifacts().forEach(n -> result.add(RepositoryUtils.toArtifact(n)));
         return Collections.unmodifiableList(result);
+    }
+
+    private Exception deploySnapshot(RepositorySystemSession repositorySystemSession, DeployRequest deployRequest) {
+        AtomicReference<Exception> exceptionAtomicReference = new AtomicReference<>();
+        int retry = 0;
+        while (retry < 5) {
+            try {
+                repositorySystem.deploy(repositorySystemSession, deployRequest);
+                exceptionAtomicReference.set(null);
+                break;
+            } catch (Exception e) {
+                exceptionAtomicReference.set(e);
+            }
+            retry++;
+        }
+        return exceptionAtomicReference.get();
     }
 }

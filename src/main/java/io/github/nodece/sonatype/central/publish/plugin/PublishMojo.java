@@ -4,11 +4,15 @@
  */
 package io.github.nodece.sonatype.central.publish.plugin;
 
+import static io.github.nodece.sonatype.central.publish.client.api.DeploymentState.FAILED;
+import static io.github.nodece.sonatype.central.publish.client.api.DeploymentState.PUBLISHED;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.CENTRAL_REPOSITORY_URL;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.CENTRAL_SNAPSHOT_REPOSITORY_URL;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.PLUGIN_NOTATION;
 import static org.apache.maven.plugins.annotations.LifecyclePhase.DEPLOY;
 
+import io.github.nodece.sonatype.central.publish.client.api.DeploymentState;
+import io.github.nodece.sonatype.central.publish.client.api.DeploymentStatus;
 import io.github.nodece.sonatype.central.publish.client.api.Publisher;
 import io.github.nodece.sonatype.central.publish.client.api.PublisherConfig;
 import io.github.nodece.sonatype.central.publish.client.api.PublishingType;
@@ -24,7 +28,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.CompletionException;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
@@ -222,42 +226,55 @@ public class PublishMojo extends AbstractMojo {
                         log.debug("Publisher config: {}", publisherConfig);
                     }
                     log.info("Initializing publisher with url: {}", publisherConfig.getUri());
-                    publisher
-                            .initialize(publisherConfig)
-                            .thenCompose(__ -> {
-                                FileInputStream fileInputStream;
-                                try {
-                                    fileInputStream = FileUtils.openInputStream(bundlePath.toFile());
-                                    String finalDeploymentName;
-                                    if (deploymentName == null) {
-                                        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
-                                        finalDeploymentName = "Deployment-"
-                                                + LocalDateTime.now().format(formatter);
-                                    } else {
-                                        finalDeploymentName = deploymentName;
-                                    }
-                                    log.info(
-                                            "Uploading {} with deployment name: {}, publishing type: {}",
-                                            bundlePath,
-                                            finalDeploymentName,
-                                            publishingType);
-                                    return publisher
-                                            .upload(
-                                                    finalDeploymentName,
-                                                    publishingType,
-                                                    bundlePath.getFileName().toString(),
-                                                    fileInputStream)
-                                            .whenComplete((id, throwable) -> {
-                                                if (throwable != null) {
-                                                    throw new CompletionException(throwable);
-                                                }
-                                                log.info("Upload completed with deployment id: {}", id);
-                                            });
-                                } catch (Exception e) {
-                                    throw new CompletionException(e);
-                                }
-                            })
-                            .join();
+                    publisher.initialize(publisherConfig).get();
+                    FileInputStream fileInputStream;
+                    fileInputStream = FileUtils.openInputStream(bundlePath.toFile());
+                    String finalDeploymentName;
+                    if (deploymentName == null) {
+                        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+                        finalDeploymentName =
+                                "Deployment-" + LocalDateTime.now().format(formatter);
+                    } else {
+                        finalDeploymentName = deploymentName;
+                    }
+                    log.info(
+                            "Uploading {} with deployment name: {}, publishing type: {}",
+                            bundlePath,
+                            finalDeploymentName,
+                            publishingType);
+                    String deploymentId = publisher
+                            .upload(
+                                    finalDeploymentName,
+                                    publishingType,
+                                    bundlePath.getFileName().toString(),
+                                    fileInputStream)
+                            .get();
+                    log.info("Upload completed with deployment id: {}", deploymentId);
+                    log.info("Waiting for deployment state to {}", PUBLISHED);
+                    boolean success;
+                    while (true) {
+                        DeploymentStatus deploymentStatus =
+                                publisher.status(deploymentId).get();
+                        if (log.isDebugEnabled()) {
+                            log.debug("Deployment status: {}", deploymentStatus);
+                        }
+                        Map<String, List<String>> errors = deploymentStatus.getErrors();
+                        DeploymentState deploymentState = deploymentStatus.getDeploymentState();
+                        if (FAILED.equals(deploymentState) || (errors != null && !errors.isEmpty())) {
+                            success = false;
+                            break;
+                        }
+                        if (PUBLISHED.equals(deploymentState)) {
+                            success = true;
+                            break;
+                        }
+                        Thread.sleep(3 * 1000);
+                    }
+                    if (success) {
+                        log.info("Published successfully, deployment id: {}", deploymentId);
+                    } else {
+                        log.error("Failed to publish, deployment id: {}", deploymentId);
+                    }
                 }
             }
         } catch (Exception e) {

@@ -7,6 +7,7 @@ package io.github.nodece.sonatype.central.publish.client.api;
 public enum DeploymentState {
     PENDING,
     VALIDATING,
+    VALIDATED,
     PUBLISHING,
     PUBLISHED,
     FAILED

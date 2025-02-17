@@ -44,6 +44,10 @@ import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.artifact.ProjectArtifact;
+import org.apache.maven.settings.Server;
+import org.apache.maven.settings.crypto.DefaultSettingsDecryptionRequest;
+import org.apache.maven.settings.crypto.SettingsDecrypter;
+import org.apache.maven.settings.crypto.SettingsDecryptionResult;
 import org.eclipse.aether.DefaultRepositorySystemSession;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
@@ -63,6 +67,8 @@ import org.eclipse.aether.util.artifact.ArtifactIdUtils;
 public class PublishMojo extends AbstractMojo {
     @Inject
     private RepositorySystem repositorySystem;
+    @Inject
+    private SettingsDecrypter settingsDecrypter;
 
     @Inject
     @Named(SimpleLocalRepositoryManagerFactory.NAME)
@@ -165,6 +171,16 @@ public class PublishMojo extends AbstractMojo {
         return true;
     }
 
+    private Server getServer() {
+        Server server = session.getSettings().getServer(serverId);
+        if (server!=null){
+            DefaultSettingsDecryptionRequest request = new DefaultSettingsDecryptionRequest(server);
+            SettingsDecryptionResult decrypt = settingsDecrypter.decrypt(request);
+            return decrypt.getServer();
+        }
+        return null;
+    }
+
     @Override
     public void execute() throws MojoExecutionException {
         PublishState publishState;
@@ -219,8 +235,7 @@ public class PublishMojo extends AbstractMojo {
                     Publisher publisher = new DefaultPublisher();
                     PublisherConfig publisherConfig = PublisherConfig.builder()
                             .uri(getRepositoryUri(false))
-                            .authentication(DefaultAuthentication.create(
-                                    session.getSettings().getServer(serverId), username, password, token))
+                            .authentication(DefaultAuthentication.create(getServer(), username, password, token))
                             .build();
                     if (log.isDebugEnabled()) {
                         log.debug("Publisher config: {}", publisherConfig);

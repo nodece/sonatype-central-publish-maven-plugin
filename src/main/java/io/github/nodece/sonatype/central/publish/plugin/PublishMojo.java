@@ -221,6 +221,7 @@ public class PublishMojo extends AbstractMojo {
                 if (exception != null) {
                     throw exception;
                 }
+                log.info("Deployed snapshot artifacts to {}", deployRequest.getRepository().getUrl());
             }
 
             if (!releaseInstallRequest.getArtifacts().isEmpty()) {

@@ -65,11 +65,4 @@ Alternatively, the `sonatype-central-publish-maven-plugin` can also use the `<sk
 
 ```shell
 mvn deploy
-
-[INFO] Creating checksum files for all files in the local repository: /tmp/sonatype-central-publisher-maven-plugin1050071465292823172/staging
-[INFO] Bundle /tmp/sonatype-central-publisher-maven-plugin1050071465292823172/bundle.zip created successfully, size: 686 MB
-[INFO] Initializing publisher with url: https://central.sonatype.com/api/v1/
-[INFO] Uploading /tmp/sonatype-central-publisher-maven-plugin1050071465292823172/bundle.zip with deployment name: Deployment-20250214184227, publishing type: USER_MANAGED
 ```
-
-Note: This command will only upload the artifacts to sonatype central and does not verify the deployment.

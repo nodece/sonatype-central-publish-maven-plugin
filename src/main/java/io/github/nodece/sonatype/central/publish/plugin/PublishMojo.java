@@ -4,32 +4,33 @@
  */
 package io.github.nodece.sonatype.central.publish.plugin;
 
-import static io.github.nodece.sonatype.central.publish.client.api.DeploymentState.FAILED;
 import static io.github.nodece.sonatype.central.publish.client.api.DeploymentState.PUBLISHED;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.CENTRAL_REPOSITORY_URL;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.CENTRAL_SNAPSHOT_REPOSITORY_URL;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.PLUGIN_NOTATION;
 import static org.apache.maven.plugins.annotations.LifecyclePhase.DEPLOY;
 
-import io.github.nodece.sonatype.central.publish.client.api.DeploymentState;
+import dev.failsafe.Failsafe;
+import dev.failsafe.RetryPolicy;
 import io.github.nodece.sonatype.central.publish.client.api.DeploymentStatus;
 import io.github.nodece.sonatype.central.publish.client.api.Publisher;
 import io.github.nodece.sonatype.central.publish.client.api.PublisherConfig;
 import io.github.nodece.sonatype.central.publish.client.api.PublishingType;
 import io.github.nodece.sonatype.central.publish.client.internal.DefaultPublisher;
+import io.github.nodece.sonatype.central.publish.client.internal.HttpResponseException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -67,6 +68,7 @@ import org.eclipse.aether.util.artifact.ArtifactIdUtils;
 public class PublishMojo extends AbstractMojo {
     @Inject
     private RepositorySystem repositorySystem;
+
     @Inject
     private SettingsDecrypter settingsDecrypter;
 
@@ -93,10 +95,10 @@ public class PublishMojo extends AbstractMojo {
     private String token;
 
     @Parameter(name = "url")
-    private URI uri;
+    private URI url;
 
     @Parameter(name = "snapshotUrl")
-    private URI snapshotUri;
+    private URI snapshotUrl;
 
     @Parameter(name = "deploymentName")
     private String deploymentName;
@@ -147,9 +149,9 @@ public class PublishMojo extends AbstractMojo {
     private URI getRepositoryUri(boolean isSnapshot) {
         URI repoUri;
         if (isSnapshot) {
-            repoUri = uri;
+            repoUri = snapshotUrl;
         } else {
-            repoUri = snapshotUri;
+            repoUri = url;
         }
         if (repoUri == null) {
             repoUri = isSnapshot ? URI.create(CENTRAL_SNAPSHOT_REPOSITORY_URL) : URI.create(CENTRAL_REPOSITORY_URL);
@@ -173,7 +175,7 @@ public class PublishMojo extends AbstractMojo {
 
     private Server getServer() {
         Server server = session.getSettings().getServer(serverId);
-        if (server!=null){
+        if (server != null) {
             DefaultSettingsDecryptionRequest request = new DefaultSettingsDecryptionRequest(server);
             SettingsDecryptionResult decrypt = settingsDecrypter.decrypt(request);
             return decrypt.getServer();
@@ -217,11 +219,10 @@ public class PublishMojo extends AbstractMojo {
                 DeployRequest deployRequest = new DeployRequest();
                 snapshotInstallRequest.getArtifacts().forEach(deployRequest::addArtifact);
                 deployRequest.setRepository(getSnapRemoteRepository());
-                Exception exception = deploySnapshot(session.getRepositorySession(), deployRequest);
-                if (exception != null) {
-                    throw exception;
-                }
-                log.info("Deployed snapshot artifacts to {}", deployRequest.getRepository().getUrl());
+                deploySnapshot(session.getRepositorySession(), deployRequest);
+                log.info(
+                        "Deployed snapshot artifacts to {}",
+                        deployRequest.getRepository().getUrl());
             }
 
             if (!releaseInstallRequest.getArtifacts().isEmpty()) {
@@ -267,34 +268,9 @@ public class PublishMojo extends AbstractMojo {
                             .get();
                     log.info("Upload completed with deployment id: {}", deploymentId);
                     log.info("Waiting for deployment state to {}", PUBLISHED);
-                    boolean success;
-                    while (true) {
-                        try {
-                            DeploymentStatus deploymentStatus =
-                                    publisher.status(deploymentId).get();
-                            if (log.isDebugEnabled()) {
-                                log.debug("Deployment status: {}", deploymentStatus);
-                            }
-                            Map<String, List<String>> errors = deploymentStatus.getErrors();
-                            DeploymentState deploymentState = deploymentStatus.getDeploymentState();
-                            if (FAILED.equals(deploymentState) || (errors != null && !errors.isEmpty())) {
-                                success = false;
-                                break;
-                            }
-                            if (PUBLISHED.equals(deploymentState)) {
-                                success = true;
-                                break;
-                            }
-                        } catch (Exception e) {
-                            log.error("Error while checking deployment status", e);
-                        }
-                        Thread.sleep(3 * 1000);
-                    }
-                    if (success) {
-                        log.info("Published successfully, deployment id: {}", deploymentId);
-                    } else {
-                        log.error("Failed to publish, deployment id: {}", deploymentId);
-                    }
+                    waitPublishState(
+                            publisher, deploymentId, n -> n != null && PUBLISHED.equals(n.getDeploymentState()));
+                    log.info("Published successfully, deployment id: {}", deploymentId);
                 }
             }
         } catch (Exception e) {
@@ -328,19 +304,34 @@ public class PublishMojo extends AbstractMojo {
         return Collections.unmodifiableList(result);
     }
 
-    private Exception deploySnapshot(RepositorySystemSession repositorySystemSession, DeployRequest deployRequest) {
-        AtomicReference<Exception> exceptionAtomicReference = new AtomicReference<>();
-        int retry = 0;
-        while (retry < 5) {
-            try {
-                repositorySystem.deploy(repositorySystemSession, deployRequest);
-                exceptionAtomicReference.set(null);
-                break;
-            } catch (Exception e) {
-                exceptionAtomicReference.set(e);
-            }
-            retry++;
-        }
-        return exceptionAtomicReference.get();
+    protected void waitPublishState(
+            Publisher publisher, String deploymentId, Function<DeploymentStatus, Boolean> condition) {
+        RetryPolicy<Object> retryPolicy = RetryPolicy.builder()
+                .withDelay(Duration.ofSeconds(3))
+                .handleIf(n -> {
+                    Throwable cause = n.getCause();
+                    if (cause instanceof HttpResponseException) {
+                        int statusCode =
+                                ((HttpResponseException) cause).getResponse().getStatusCode();
+                        if (statusCode == 404 || statusCode == 401) {
+                            return false;
+                        }
+                    }
+                    return true;
+                })
+                .handleResultIf(n -> !condition.apply((DeploymentStatus) n))
+                .withMaxRetries(-1)
+                .build();
+        Failsafe.with(retryPolicy).get(() -> publisher.status(deploymentId).get());
+    }
+
+    private void deploySnapshot(RepositorySystemSession repositorySystemSession, DeployRequest deployRequest) {
+        RetryPolicy<Object> retryPolicy = RetryPolicy.builder()
+                .withMaxRetries(3)
+                .withDelay(Duration.ofSeconds(3))
+                .withMaxRetries(-1)
+                .onFailedAttempt(e -> log.debug("Deploy snapshot failed: {}", e))
+                .build();
+        Failsafe.with(retryPolicy).get(() -> repositorySystem.deploy(repositorySystemSession, deployRequest));
     }
 }

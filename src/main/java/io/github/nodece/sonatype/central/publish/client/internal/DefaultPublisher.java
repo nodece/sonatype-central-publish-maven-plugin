@@ -4,6 +4,8 @@
  */
 package io.github.nodece.sonatype.central.publish.client.internal;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.nodece.sonatype.central.publish.client.api.Authentication;
 import io.github.nodece.sonatype.central.publish.client.api.DeploymentStatus;
 import io.github.nodece.sonatype.central.publish.client.api.Publisher;
@@ -18,6 +20,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
 import javax.inject.Named;
 import org.asynchttpclient.AsyncHttpClient;
@@ -32,6 +35,11 @@ import org.asynchttpclient.util.HttpConstants.Methods;
 public class DefaultPublisher implements Publisher {
     private AsyncHttpClient asyncHttpClient;
     private PublisherConfig publisherConfig;
+    private static final ObjectMapper objectMapper = new ObjectMapper();
+
+    static {
+        objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    }
 
     public static URI join(URI baseUri, String pathSegment, String query) throws URISyntaxException {
         URI resolvedUri = baseUri.resolve(pathSegment);
@@ -83,6 +91,7 @@ public class DefaultPublisher implements Publisher {
         builder.setConnectTimeout(Duration.ofMinutes(1));
         builder.setRequestTimeout(Duration.ofMinutes(30));
         builder.setReadTimeout(Duration.ofMinutes(30));
+        builder.setMaxRequestRetry(-1);
         asyncHttpClient = new DefaultAsyncHttpClient(builder.build());
         publisherConfig = config;
         return CompletableFuture.completedFuture(null);
@@ -118,8 +127,13 @@ public class DefaultPublisher implements Publisher {
         query.put("id", deploymentId);
         try {
             URI uri = join(publisherConfig.getUri(), "publisher/status", mapToQueryString(query));
-            return request(Methods.GET, uri, __ -> {})
-                    .thenCompose(n -> CompletableFuture.completedFuture(new DeploymentStatus()));
+            return request(Methods.POST, uri, __ -> {}).thenApply(n -> {
+                try {
+                    return objectMapper.readValue(n.getResponseBodyAsBytes(), DeploymentStatus.class);
+                } catch (Exception e) {
+                    throw new CompletionException(e);
+                }
+            });
         } catch (Exception e) {
             return FutureUtils.failedFuture(e);
         }

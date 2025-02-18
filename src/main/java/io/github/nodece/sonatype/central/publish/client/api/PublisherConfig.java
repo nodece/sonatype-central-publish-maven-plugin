@@ -5,11 +5,12 @@
 package io.github.nodece.sonatype.central.publish.client.api;
 
 import java.net.URI;
-import lombok.Data;
+import lombok.Builder;
+import lombok.Getter;
 import lombok.ToString;
 
-@Data
-@lombok.Builder
+@Getter
+@Builder
 @ToString
 public class PublisherConfig {
     private URI uri;

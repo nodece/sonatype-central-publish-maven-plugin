@@ -12,7 +12,7 @@ public class HttpResponseException extends RuntimeException {
     private final Response response;
 
     public HttpResponseException(Response response) {
-        super(response.hasResponseBody() ? response.getResponseBody() : String.valueOf(response.getStatusCode()));
+        super(response.toString());
         this.response = response;
     }
 }

@@ -269,20 +269,24 @@ public class PublishMojo extends AbstractMojo {
                     log.info("Waiting for deployment state to {}", PUBLISHED);
                     boolean success;
                     while (true) {
-                        DeploymentStatus deploymentStatus =
-                                publisher.status(deploymentId).get();
-                        if (log.isDebugEnabled()) {
-                            log.debug("Deployment status: {}", deploymentStatus);
-                        }
-                        Map<String, List<String>> errors = deploymentStatus.getErrors();
-                        DeploymentState deploymentState = deploymentStatus.getDeploymentState();
-                        if (FAILED.equals(deploymentState) || (errors != null && !errors.isEmpty())) {
-                            success = false;
-                            break;
-                        }
-                        if (PUBLISHED.equals(deploymentState)) {
-                            success = true;
-                            break;
+                        try {
+                            DeploymentStatus deploymentStatus =
+                                    publisher.status(deploymentId).get();
+                            if (log.isDebugEnabled()) {
+                                log.debug("Deployment status: {}", deploymentStatus);
+                            }
+                            Map<String, List<String>> errors = deploymentStatus.getErrors();
+                            DeploymentState deploymentState = deploymentStatus.getDeploymentState();
+                            if (FAILED.equals(deploymentState) || (errors != null && !errors.isEmpty())) {
+                                success = false;
+                                break;
+                            }
+                            if (PUBLISHED.equals(deploymentState)) {
+                                success = true;
+                                break;
+                            }
+                        } catch (Exception e) {
+                            log.error("Error while checking deployment status", e);
                         }
                         Thread.sleep(3 * 1000);
                     }

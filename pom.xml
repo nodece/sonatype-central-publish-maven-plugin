@@ -11,7 +11,7 @@
 
   <groupId>io.github.nodece</groupId>
   <artifactId>sonatype-central-publish-maven-plugin</artifactId>
-  <version>0.0.2</version>
+  <version>0.0.3</version>
 
   <packaging>maven-plugin</packaging>
 

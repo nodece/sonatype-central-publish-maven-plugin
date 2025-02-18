@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -16,12 +16,14 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
           server-id: 'central'
-          server-username: 'CENTRAL_USERNAME'
-          server-password: 'CENTRAL_PASSWORD'
+          server-username: 'MAVEN_CENTRAL_USERNAME'
+          server-password: 'MAVEN_CENTRAL_PASSWORD'
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
-
-      - name: Build
+      - name: Deploy to Maven Central
         run: mvn deploy -Prelease
         env:
-          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
-          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}

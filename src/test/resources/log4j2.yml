@@ -1,0 +1,22 @@
+Configuration:
+  status: error
+  appenders:
+    Console:
+      name: Console
+      target: SYSTEM_OUT
+      PatternLayout:
+        pattern: "[%d{HH:mm:ss.SSS}] [%-5level] [%t] %logger{36} - %msg%n"
+
+  loggers:
+    root:
+      level: info
+      AppenderRef:
+        ref: Console
+
+    logger:
+#      - name: com.example
+#        level: debug
+#        additivity: false
+#        AppenderRef:
+#          ref: Console
+

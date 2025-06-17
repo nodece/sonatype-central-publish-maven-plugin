@@ -4,14 +4,17 @@
  */
 package io.github.nodece.sonatype.central.publish.plugin;
 
+import static io.github.nodece.sonatype.central.publish.client.api.DeploymentState.FAILED;
 import static io.github.nodece.sonatype.central.publish.client.api.DeploymentState.PUBLISHED;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.CENTRAL_REPOSITORY_URL;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.CENTRAL_SNAPSHOT_REPOSITORY_URL;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.PLUGIN_NOTATION;
+import static io.github.nodece.sonatype.central.publish.util.FutureUtils.unwrapCompletionException;
 import static org.apache.maven.plugins.annotations.LifecyclePhase.DEPLOY;
 
 import dev.failsafe.Failsafe;
 import dev.failsafe.RetryPolicy;
+import io.github.nodece.sonatype.central.publish.client.api.DeploymentState;
 import io.github.nodece.sonatype.central.publish.client.api.DeploymentStatus;
 import io.github.nodece.sonatype.central.publish.client.api.Publisher;
 import io.github.nodece.sonatype.central.publish.client.api.PublisherConfig;
@@ -30,7 +33,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.function.Function;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -268,9 +272,26 @@ public class PublishMojo extends AbstractMojo {
                             .get();
                     log.info("Upload completed with deployment id: {}", deploymentId);
                     log.info("Waiting for deployment state to {}", PUBLISHED);
-                    waitPublishState(
-                            publisher, deploymentId, n -> n != null && PUBLISHED.equals(n.getDeploymentState()));
-                    log.info("Published successfully, deployment id: {}", deploymentId);
+                    DeploymentStatus deploymentStatus =
+                            waitPublishStateAsync(publisher, deploymentId).get();
+                    DeploymentState state = deploymentStatus.getDeploymentState();
+                    if (state == PUBLISHED) {
+                        List<String> purls = deploymentStatus.getPurls();
+                        if (purls != null && !purls.isEmpty()) {
+                            log.info("Published {} PURLs:", purls.size());
+                            purls.forEach(purl -> log.info(" - {}", purl));
+                        }
+                        log.info("Published successfully, deployment id: {}", deploymentId);
+                    } else {
+                        log.error("Deployment failed with state: {}", state);
+                        Map<String, List<String>> errors = deploymentStatus.getErrors();
+                        if (errors != null && !errors.isEmpty()) {
+                            errors.forEach((key, messages) -> {
+                                messages.forEach(msg -> log.error("{}: {}", key, msg));
+                            });
+                        }
+                        throw new MojoExecutionException("Deployment failed with state: " + state);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -304,25 +325,41 @@ public class PublishMojo extends AbstractMojo {
         return Collections.unmodifiableList(result);
     }
 
-    protected void waitPublishState(
-            Publisher publisher, String deploymentId, Function<DeploymentStatus, Boolean> condition) {
+    protected static CompletableFuture<DeploymentStatus> waitPublishStateAsync(
+            Publisher publisher, String deploymentId) {
         RetryPolicy<Object> retryPolicy = RetryPolicy.builder()
                 .withDelay(Duration.ofSeconds(3))
                 .handleIf(n -> {
-                    Throwable cause = n.getCause();
+                    if (log.isDebugEnabled()) {
+                        log.error("Waiting for deployment state, retrying...", n);
+                    }
+                    Throwable cause = unwrapCompletionException(n);
                     if (cause instanceof HttpResponseException) {
                         int statusCode =
                                 ((HttpResponseException) cause).getResponse().getStatusCode();
-                        if (statusCode == 404 || statusCode == 401) {
+                        if (statusCode == 404 || statusCode == 401 || statusCode == 403) {
+                            log.error("Deployment {} failed with status code: {}", deploymentId, statusCode, n);
                             return false;
                         }
                     }
                     return true;
                 })
-                .handleResultIf(n -> !condition.apply((DeploymentStatus) n))
+                .handleResultIf(n -> {
+                    if (log.isDebugEnabled()) {
+                        log.debug("Checking deployment status: {}", n);
+                    }
+                    if (n instanceof DeploymentStatus) {
+                        DeploymentState deploymentState = ((DeploymentStatus) n).getDeploymentState();
+                        if (FAILED.equals(deploymentState) || PUBLISHED.equals(deploymentState)) {
+                            // abort the retry if the deployment is failed or published.
+                            return false;
+                        }
+                    }
+                    return true;
+                })
                 .withMaxRetries(-1)
                 .build();
-        Failsafe.with(retryPolicy).get(() -> publisher.status(deploymentId).get());
+        return Failsafe.with(retryPolicy).getStageAsync(() -> publisher.status(deploymentId));
     }
 
     private void deploySnapshot(RepositorySystemSession repositorySystemSession, DeployRequest deployRequest) {

@@ -13,6 +13,7 @@ import static io.github.nodece.sonatype.central.publish.util.FutureUtils.unwrapC
 import static org.apache.maven.plugins.annotations.LifecyclePhase.DEPLOY;
 
 import dev.failsafe.Failsafe;
+import dev.failsafe.FailsafeExecutor;
 import dev.failsafe.RetryPolicy;
 import io.github.nodece.sonatype.central.publish.client.api.DeploymentState;
 import io.github.nodece.sonatype.central.publish.client.api.DeploymentStatus;
@@ -21,6 +22,7 @@ import io.github.nodece.sonatype.central.publish.client.api.PublisherConfig;
 import io.github.nodece.sonatype.central.publish.client.api.PublishingType;
 import io.github.nodece.sonatype.central.publish.client.internal.DefaultPublisher;
 import io.github.nodece.sonatype.central.publish.client.internal.HttpResponseException;
+import io.netty.util.concurrent.DefaultThreadFactory;
 import java.io.File;
 import java.io.FileInputStream;
 import java.net.URI;
@@ -35,6 +37,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -70,6 +74,9 @@ import org.eclipse.aether.util.artifact.ArtifactIdUtils;
 @Slf4j
 @Mojo(name = "publish", defaultPhase = DEPLOY, threadSafe = true, requiresOnline = true)
 public class PublishMojo extends AbstractMojo {
+    private ExecutorService executor =
+            Executors.newSingleThreadExecutor(new DefaultThreadFactory("sonatype-central-publisher-maven-plugin"));
+
     @Inject
     private RepositorySystem repositorySystem;
 
@@ -272,8 +279,7 @@ public class PublishMojo extends AbstractMojo {
                             .get();
                     log.info("Upload completed with deployment id: {}", deploymentId);
                     log.info("Waiting for deployment state to {}", PUBLISHED);
-                    DeploymentStatus deploymentStatus =
-                            waitPublishStateAsync(publisher, deploymentId).get();
+                    DeploymentStatus deploymentStatus = waitPublishState(publisher, deploymentId);
                     DeploymentState state = deploymentStatus.getDeploymentState();
                     if (state == PUBLISHED) {
                         List<String> purls = deploymentStatus.getPurls();
@@ -294,7 +300,7 @@ public class PublishMojo extends AbstractMojo {
                     }
                 }
             }
-        } catch (Exception e) {
+        } catch (Throwable e) {
             throw new MojoExecutionException(e);
         }
     }
@@ -325,8 +331,12 @@ public class PublishMojo extends AbstractMojo {
         return Collections.unmodifiableList(result);
     }
 
+    protected DeploymentStatus waitPublishState(Publisher publisher, String deploymentId) throws Throwable {
+        return waitPublishStateAsync(publisher, deploymentId, executor).get();
+    }
+
     protected static CompletableFuture<DeploymentStatus> waitPublishStateAsync(
-            Publisher publisher, String deploymentId) {
+            Publisher publisher, String deploymentId, ExecutorService executor) {
         RetryPolicy<Object> retryPolicy = RetryPolicy.builder()
                 .withDelay(Duration.ofSeconds(3))
                 .handleIf(n -> {
@@ -359,7 +369,11 @@ public class PublishMojo extends AbstractMojo {
                 })
                 .withMaxRetries(-1)
                 .build();
-        return Failsafe.with(retryPolicy).getStageAsync(() -> publisher.status(deploymentId));
+        FailsafeExecutor<Object> with = Failsafe.with(retryPolicy);
+        if (executor != null) {
+            with = with.with(executor);
+        }
+        return with.getStageAsync(() -> publisher.status(deploymentId));
     }
 
     private void deploySnapshot(RepositorySystemSession repositorySystemSession, DeployRequest deployRequest) {

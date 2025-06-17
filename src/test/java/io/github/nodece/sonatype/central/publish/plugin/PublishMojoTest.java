@@ -45,7 +45,8 @@ public class PublishMojoTest {
         Publisher publisher = mock(Publisher.class);
         when(publisher.status(deploymentId)).thenReturn(completedFuture(status));
 
-        CompletableFuture<DeploymentStatus> futureStatus = PublishMojo.waitPublishStateAsync(publisher, deploymentId);
+        CompletableFuture<DeploymentStatus> futureStatus =
+                PublishMojo.waitPublishStateAsync(publisher, deploymentId, null);
 
         assertThat(futureStatus).succeedsWithin(2, TimeUnit.SECONDS).satisfies(result -> {
             assertThat(result.getDeploymentState()).isEqualTo(DeploymentState.FAILED);
@@ -66,7 +67,8 @@ public class PublishMojoTest {
         Publisher publisher = mock(Publisher.class);
         when(publisher.status(deploymentId)).thenReturn(completedFuture(status));
 
-        CompletableFuture<DeploymentStatus> futureStatus = PublishMojo.waitPublishStateAsync(publisher, deploymentId);
+        CompletableFuture<DeploymentStatus> futureStatus =
+                PublishMojo.waitPublishStateAsync(publisher, deploymentId, null);
 
         assertThat(futureStatus).succeedsWithin(2, TimeUnit.SECONDS).satisfies(result -> {
             assertThat(result.getDeploymentState()).isEqualTo(DeploymentState.PUBLISHED);
@@ -94,7 +96,8 @@ public class PublishMojoTest {
                 .thenReturn(completedFuture(firstStatus))
                 .thenReturn(completedFuture(secondStatus));
 
-        CompletableFuture<DeploymentStatus> futureStatus = PublishMojo.waitPublishStateAsync(publisher, deploymentId);
+        CompletableFuture<DeploymentStatus> futureStatus =
+                PublishMojo.waitPublishStateAsync(publisher, deploymentId, null);
 
         assertThat(futureStatus).succeedsWithin(6, TimeUnit.SECONDS).satisfies(status -> {
             assertThat(status.getDeploymentState()).isEqualTo(expectedFinalState);
@@ -124,7 +127,8 @@ public class PublishMojoTest {
         failedFuture.completeExceptionally(httpException);
         when(publisher.status(deploymentId)).thenReturn(failedFuture);
 
-        CompletableFuture<DeploymentStatus> futureStatus = PublishMojo.waitPublishStateAsync(publisher, deploymentId);
+        CompletableFuture<DeploymentStatus> futureStatus =
+                PublishMojo.waitPublishStateAsync(publisher, deploymentId, null);
 
         assertThat(futureStatus)
                 .failsWithin(3, TimeUnit.SECONDS)

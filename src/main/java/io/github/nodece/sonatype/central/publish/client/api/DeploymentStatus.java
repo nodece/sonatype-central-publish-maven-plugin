@@ -6,13 +6,17 @@ package io.github.nodece.sonatype.central.publish.client.api;
 
 import java.util.List;
 import java.util.Map;
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.ToString;
 
 @Getter
-@Builder
 @ToString
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class DeploymentStatus {
     private String deploymentId;
     private String deploymentName;

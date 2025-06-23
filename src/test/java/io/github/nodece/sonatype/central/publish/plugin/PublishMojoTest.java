@@ -4,8 +4,10 @@
  */
 package io.github.nodece.sonatype.central.publish.plugin;
 
+import static io.github.nodece.sonatype.central.publish.client.api.DeploymentState.PUBLISHED;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -18,7 +20,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import lombok.Cleanup;
 import lombok.extern.slf4j.Slf4j;
 import org.asynchttpclient.Response;
 import org.testng.annotations.DataProvider;
@@ -28,7 +35,7 @@ import org.testng.annotations.Test;
 public class PublishMojoTest {
 
     @Test
-    public void deploymentFailsWithErrors() {
+    public void deploymentFailsWithErrors() throws Throwable {
         String deploymentId = "deploymentId-123";
 
         Map<String, List<String>> errors = new HashMap<>();
@@ -45,40 +52,32 @@ public class PublishMojoTest {
         Publisher publisher = mock(Publisher.class);
         when(publisher.status(deploymentId)).thenReturn(completedFuture(status));
 
-        CompletableFuture<DeploymentStatus> futureStatus =
-                PublishMojo.waitPublishStateAsync(publisher, deploymentId, null);
-
-        assertThat(futureStatus).succeedsWithin(2, TimeUnit.SECONDS).satisfies(result -> {
-            assertThat(result.getDeploymentState()).isEqualTo(DeploymentState.FAILED);
-            assertThat(result.getErrors()).isEqualTo(finalErrors);
-        });
+        DeploymentStatus deploymentStatus = PublishMojo.waitPublishState(publisher, deploymentId);
+        assertThat(deploymentStatus.getDeploymentState()).isEqualTo(DeploymentState.FAILED);
+        assertThat(deploymentStatus.getErrors()).isEqualTo(finalErrors);
     }
 
     @Test
-    public void deploymentSucceedsWithPublishedState() {
+    public void deploymentSucceedsWithPublishedState() throws Throwable {
         String deploymentId = "deploymentId-123";
 
         DeploymentStatus status = DeploymentStatus.builder()
                 .deploymentId(deploymentId)
-                .deploymentState(DeploymentState.PUBLISHED)
+                .deploymentState(PUBLISHED)
                 .purls(Collections.singletonList("pkg:maven/com.example/demo-lib-two@1.0.0"))
                 .build();
 
         Publisher publisher = mock(Publisher.class);
         when(publisher.status(deploymentId)).thenReturn(completedFuture(status));
 
-        CompletableFuture<DeploymentStatus> futureStatus =
-                PublishMojo.waitPublishStateAsync(publisher, deploymentId, null);
-
-        assertThat(futureStatus).succeedsWithin(2, TimeUnit.SECONDS).satisfies(result -> {
-            assertThat(result.getDeploymentState()).isEqualTo(DeploymentState.PUBLISHED);
-        });
+        DeploymentStatus deploymentStatus = PublishMojo.waitPublishState(publisher, deploymentId);
+        assertThat(deploymentStatus.getDeploymentState()).isEqualTo(PUBLISHED);
     }
 
     @Test(dataProvider = "deploymentTransitions")
     public void deploymentStateTransitions(
             DeploymentState firstState, DeploymentState secondState, DeploymentState expectedFinalState)
-            throws Exception {
+            throws Throwable {
         String deploymentId = "test-deployment";
 
         DeploymentStatus firstStatus = DeploymentStatus.builder()
@@ -96,48 +95,68 @@ public class PublishMojoTest {
                 .thenReturn(completedFuture(firstStatus))
                 .thenReturn(completedFuture(secondStatus));
 
-        CompletableFuture<DeploymentStatus> futureStatus =
-                PublishMojo.waitPublishStateAsync(publisher, deploymentId, null);
-
-        assertThat(futureStatus).succeedsWithin(6, TimeUnit.SECONDS).satisfies(status -> {
-            assertThat(status.getDeploymentState()).isEqualTo(expectedFinalState);
-        });
+        DeploymentStatus deploymentStatus = PublishMojo.waitPublishState(publisher, deploymentId);
+        assertThat(deploymentStatus.getDeploymentState()).isEqualTo(expectedFinalState);
     }
 
     @DataProvider
     public Object[][] deploymentTransitions() {
         return new Object[][] {
-            {DeploymentState.PUBLISHING, DeploymentState.PUBLISHED, DeploymentState.PUBLISHED},
+            {DeploymentState.PUBLISHING, PUBLISHED, PUBLISHED},
             {DeploymentState.PENDING, DeploymentState.FAILED, DeploymentState.FAILED}
         };
     }
 
     @Test(dataProvider = "httpErrorCodes")
-    public void deploymentFailsWithHttpError(int statusCode) {
+    public void deploymentFailsWithHttpError(int statusCode) throws Throwable {
         String deploymentId = "deploymentId-error-" + statusCode;
 
-        HttpResponseException httpException = mock(HttpResponseException.class);
         Response response = mock(Response.class);
         when(response.getStatusCode()).thenReturn(statusCode);
-        when(httpException.getMessage()).thenReturn("HTTP error occurred");
-        when(httpException.getResponse()).thenReturn(response);
+        when(response.getStatusText()).thenReturn("HTTP error occurred");
 
         Publisher publisher = mock(Publisher.class);
         CompletableFuture<DeploymentStatus> failedFuture = new CompletableFuture<>();
+        HttpResponseException httpException = new HttpResponseException(response);
         failedFuture.completeExceptionally(httpException);
         when(publisher.status(deploymentId)).thenReturn(failedFuture);
 
-        CompletableFuture<DeploymentStatus> futureStatus =
-                PublishMojo.waitPublishStateAsync(publisher, deploymentId, null);
-
-        assertThat(futureStatus)
-                .failsWithin(3, TimeUnit.SECONDS)
-                .withThrowableThat()
-                .withCause(httpException);
+        assertThatThrownBy(() -> PublishMojo.waitPublishState(publisher, deploymentId))
+                .hasCause(httpException);
     }
 
     @DataProvider
     public Object[][] httpErrorCodes() {
         return new Object[][] {{401}, {403}, {404}};
+    }
+
+    @Test
+    public void testThreadBlocksUntilPublish() throws Exception {
+        String deploymentId = "test-deployment";
+
+        Publisher publisher = mock(Publisher.class);
+        AtomicInteger attempts = new AtomicInteger();
+
+        when(publisher.status(deploymentId)).thenAnswer(inv -> {
+            int i = attempts.getAndIncrement();
+            DeploymentState state = (i < 3) ? DeploymentState.PUBLISHING : DeploymentState.PUBLISHED;
+            return CompletableFuture.completedFuture(DeploymentStatus.builder()
+                    .deploymentId(deploymentId)
+                    .deploymentState(state)
+                    .build());
+        });
+
+        @Cleanup("shutdownNow")
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        Future<DeploymentStatus> future = executor.submit(() -> {
+            try {
+                return PublishMojo.waitPublishState(publisher, deploymentId);
+            } catch (Throwable e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        assertThat(future).succeedsWithin(15, TimeUnit.SECONDS).satisfies(n -> assertThat(n.getDeploymentState())
+                .isEqualTo(DeploymentState.PUBLISHED));
     }
 }

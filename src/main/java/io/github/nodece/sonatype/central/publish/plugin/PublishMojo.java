@@ -4,7 +4,6 @@
  */
 package io.github.nodece.sonatype.central.publish.plugin;
 
-import static io.github.nodece.sonatype.central.publish.client.api.DeploymentState.FAILED;
 import static io.github.nodece.sonatype.central.publish.client.api.DeploymentState.PUBLISHED;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.CENTRAL_REPOSITORY_URL;
 import static io.github.nodece.sonatype.central.publish.plugin.Constants.CENTRAL_SNAPSHOT_REPOSITORY_URL;
@@ -13,7 +12,6 @@ import static io.github.nodece.sonatype.central.publish.util.FutureUtils.unwrapC
 import static org.apache.maven.plugins.annotations.LifecyclePhase.DEPLOY;
 
 import dev.failsafe.Failsafe;
-import dev.failsafe.FailsafeExecutor;
 import dev.failsafe.RetryPolicy;
 import io.github.nodece.sonatype.central.publish.client.api.DeploymentState;
 import io.github.nodece.sonatype.central.publish.client.api.DeploymentStatus;
@@ -22,7 +20,6 @@ import io.github.nodece.sonatype.central.publish.client.api.PublisherConfig;
 import io.github.nodece.sonatype.central.publish.client.api.PublishingType;
 import io.github.nodece.sonatype.central.publish.client.internal.DefaultPublisher;
 import io.github.nodece.sonatype.central.publish.client.internal.HttpResponseException;
-import io.netty.util.concurrent.DefaultThreadFactory;
 import java.io.File;
 import java.io.FileInputStream;
 import java.net.URI;
@@ -36,9 +33,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -74,8 +68,6 @@ import org.eclipse.aether.util.artifact.ArtifactIdUtils;
 @Slf4j
 @Mojo(name = "publish", defaultPhase = DEPLOY, threadSafe = true, requiresOnline = true)
 public class PublishMojo extends AbstractMojo {
-    private ExecutorService executor =
-            Executors.newSingleThreadExecutor(new DefaultThreadFactory("sonatype-central-publisher-maven-plugin"));
 
     @Inject
     private RepositorySystem repositorySystem;
@@ -289,9 +281,9 @@ public class PublishMojo extends AbstractMojo {
                         }
                         log.info("Published successfully, deployment id: {}", deploymentId);
                     } else {
-                        log.error("Deployment failed with state: {}", state);
                         Map<String, List<String>> errors = deploymentStatus.getErrors();
                         if (errors != null && !errors.isEmpty()) {
+                            log.error("Deployment failed: ");
                             errors.forEach((key, messages) -> {
                                 messages.forEach(msg -> log.error("{}: {}", key, msg));
                             });
@@ -331,49 +323,41 @@ public class PublishMojo extends AbstractMojo {
         return Collections.unmodifiableList(result);
     }
 
-    protected DeploymentStatus waitPublishState(Publisher publisher, String deploymentId) throws Throwable {
-        return waitPublishStateAsync(publisher, deploymentId, executor).get();
-    }
-
-    protected static CompletableFuture<DeploymentStatus> waitPublishStateAsync(
-            Publisher publisher, String deploymentId, ExecutorService executor) {
-        RetryPolicy<Object> retryPolicy = RetryPolicy.builder()
+    protected static DeploymentStatus waitPublishState(Publisher publisher, String deploymentId) throws Throwable {
+        RetryPolicy<DeploymentStatus> retryPolicy = RetryPolicy.<DeploymentStatus>builder()
                 .withDelay(Duration.ofSeconds(3))
-                .handleIf(n -> {
+                .handleIf(throwable -> {
                     if (log.isDebugEnabled()) {
-                        log.error("Waiting for deployment state, retrying...", n);
+                        log.debug("Failed to get deployment status for {}", deploymentId, throwable);
                     }
-                    Throwable cause = unwrapCompletionException(n);
+                    Throwable cause = unwrapCompletionException(throwable);
                     if (cause instanceof HttpResponseException) {
                         int statusCode =
                                 ((HttpResponseException) cause).getResponse().getStatusCode();
                         if (statusCode == 404 || statusCode == 401 || statusCode == 403) {
-                            log.error("Deployment {} failed with status code: {}", deploymentId, statusCode, n);
+                            log.error("Deployment {} failed with status code: {}", deploymentId, statusCode, cause);
                             return false;
+                        } else {
+                            return true;
                         }
                     }
-                    return true;
+                    return false;
                 })
-                .handleResultIf(n -> {
+                .handleResultIf(res -> {
                     if (log.isDebugEnabled()) {
-                        log.debug("Checking deployment status: {}", n);
+                        log.debug("Received deployment status: {}", res);
                     }
-                    if (n instanceof DeploymentStatus) {
-                        DeploymentState deploymentState = ((DeploymentStatus) n).getDeploymentState();
-                        if (FAILED.equals(deploymentState) || PUBLISHED.equals(deploymentState)) {
-                            // abort the retry if the deployment is failed or published.
-                            return false;
-                        }
+                    if (res != null) {
+                        DeploymentState state = res.getDeploymentState();
+                        return !(state == DeploymentState.FAILED || state == DeploymentState.PUBLISHED);
                     }
                     return true;
                 })
                 .withMaxRetries(-1)
                 .build();
-        FailsafeExecutor<Object> with = Failsafe.with(retryPolicy);
-        if (executor != null) {
-            with = with.with(executor);
-        }
-        return with.getStageAsync(() -> publisher.status(deploymentId));
+        return Failsafe.with(retryPolicy)
+                .getStageAsync(() -> publisher.status(deploymentId))
+                .get();
     }
 
     private void deploySnapshot(RepositorySystemSession repositorySystemSession, DeployRequest deployRequest) {

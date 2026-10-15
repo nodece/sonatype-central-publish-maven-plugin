@@ -21,7 +21,7 @@ import io.github.nodece.sonatype.central.publish.client.api.PublishingType;
 import io.github.nodece.sonatype.central.publish.client.internal.DefaultPublisher;
 import io.github.nodece.sonatype.central.publish.client.internal.HttpResponseException;
 import java.io.File;
-import java.io.FileInputStream;
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,6 +29,7 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -247,8 +248,6 @@ public class PublishMojo extends AbstractMojo {
                     }
                     log.info("Initializing publisher with url: {}", publisherConfig.getUri());
                     publisher.initialize(publisherConfig).get();
-                    FileInputStream fileInputStream;
-                    fileInputStream = FileUtils.openInputStream(bundlePath.toFile());
                     String finalDeploymentName;
                     if (deploymentName == null) {
                         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
@@ -262,13 +261,7 @@ public class PublishMojo extends AbstractMojo {
                             bundlePath,
                             finalDeploymentName,
                             publishingType);
-                    String deploymentId = publisher
-                            .upload(
-                                    finalDeploymentName,
-                                    publishingType,
-                                    bundlePath.getFileName().toString(),
-                                    fileInputStream)
-                            .get();
+                    String deploymentId = uploadBundle(publisher, finalDeploymentName, publishingType, bundlePath);
                     log.info("Upload completed with deployment id: {}", deploymentId);
                     log.info("Waiting for deployment state to {}", PUBLISHED);
                     DeploymentStatus deploymentStatus = waitPublishState(publisher, deploymentId);
@@ -323,6 +316,39 @@ public class PublishMojo extends AbstractMojo {
         return Collections.unmodifiableList(result);
     }
 
+    protected static String uploadBundle(
+            Publisher publisher, String deploymentName, PublishingType publishingType, Path bundlePath)
+            throws Throwable {
+        RetryPolicy<String> retryPolicy = RetryPolicy.<String>builder()
+                .withBackoff(5, 60, ChronoUnit.SECONDS)
+                .withMaxRetries(5)
+                .handleIf(throwable -> {
+                    Throwable cause = unwrapCompletionException(throwable);
+                    if (cause instanceof HttpResponseException) {
+                        int statusCode =
+                                ((HttpResponseException) cause).getResponse().getStatusCode();
+                        if (statusCode >= 500) {
+                            log.warn(
+                                    "Upload failed with status code {}, retrying. Note: the failed attempt may already have created a deployment on the server",
+                                    statusCode,
+                                    cause);
+                            return true;
+                        }
+                        log.error("Upload failed with status code {}", statusCode, cause);
+                        return false;
+                    }
+                    if (cause instanceof IOException) {
+                        log.warn("Upload failed with transport error, retrying", cause);
+                        return true;
+                    }
+                    return false;
+                })
+                .build();
+        return Failsafe.with(retryPolicy)
+                .getStageAsync(() -> publisher.upload(deploymentName, publishingType, bundlePath))
+                .get();
+    }
+
     protected static DeploymentStatus waitPublishState(Publisher publisher, String deploymentId) throws Throwable {
         RetryPolicy<DeploymentStatus> retryPolicy = RetryPolicy.<DeploymentStatus>builder()
                 .withDelay(Duration.ofSeconds(3))
@@ -364,8 +390,7 @@ public class PublishMojo extends AbstractMojo {
         RetryPolicy<Object> retryPolicy = RetryPolicy.builder()
                 .withMaxRetries(3)
                 .withDelay(Duration.ofSeconds(3))
-                .withMaxRetries(-1)
-                .onFailedAttempt(e -> log.debug("Deploy snapshot failed: {}", e))
+                .onFailedAttempt(e -> log.debug("Deploy snapshot failed", e.getLastException()))
                 .build();
         Failsafe.with(retryPolicy).get(() -> repositorySystem.deploy(repositorySystemSession, deployRequest));
     }

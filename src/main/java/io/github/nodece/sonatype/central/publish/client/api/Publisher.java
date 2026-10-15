@@ -4,16 +4,16 @@
  */
 package io.github.nodece.sonatype.central.publish.client.api;
 
-import java.io.InputStream;
+import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 
 public interface Publisher {
     CompletableFuture<Void> initialize(PublisherConfig config);
 
-    CompletableFuture<String> upload(
-            String deploymentName, PublishingType publishingType, String filename, InputStream inputStream);
-
-    CompletableFuture<Void> publish(String deploymentId);
+    /**
+     * Uploads a bundle, sending the file size as the HTTP {@code Content-Length} to avoid chunked transfer encoding.
+     */
+    CompletableFuture<String> upload(String deploymentName, PublishingType publishingType, Path bundlePath);
 
     CompletableFuture<DeploymentStatus> status(String deploymentId);
 

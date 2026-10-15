@@ -16,6 +16,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -91,34 +93,37 @@ public class DefaultPublisher implements Publisher {
         builder.setConnectTimeout(Duration.ofMinutes(1));
         builder.setRequestTimeout(Duration.ofMinutes(30));
         builder.setReadTimeout(Duration.ofMinutes(30));
-        builder.setMaxRequestRetry(-1);
+        builder.setMaxRequestRetry(3);
         asyncHttpClient = new DefaultAsyncHttpClient(builder.build());
         publisherConfig = config;
         return CompletableFuture.completedFuture(null);
     }
 
     @Override
-    public CompletableFuture<String> upload(
-            String deploymentName, PublishingType publishingType, String filename, InputStream inputStream) {
+    public CompletableFuture<String> upload(String deploymentName, PublishingType publishingType, Path bundlePath) {
         Map<String, String> query = new HashMap<>();
         if (deploymentName != null) {
             query.put("name", deploymentName);
         }
         query.put("publishingType", publishingType.name());
+        long contentLength;
+        InputStream inputStream;
+        try {
+            contentLength = Files.size(bundlePath);
+            inputStream = Files.newInputStream(bundlePath);
+        } catch (IOException e) {
+            return FutureUtils.failedFuture(new IllegalStateException("Failed to read bundle " + bundlePath, e));
+        }
         try {
             URI uri = join(publisherConfig.getUri(), "publisher/upload", mapToQueryString(query));
             return request(Methods.POST, uri, n -> {
-                        n.addBodyPart(new InputStreamPart("bundle", inputStream, filename));
+                        n.addBodyPart(new InputStreamPart(
+                                "bundle", inputStream, bundlePath.getFileName().toString(), contentLength));
                     })
                     .thenApply(Response::getResponseBody);
         } catch (Exception e) {
             return FutureUtils.failedFuture(e);
         }
-    }
-
-    @Override
-    public CompletableFuture<Void> publish(String deploymentId) {
-        return null;
     }
 
     @Override

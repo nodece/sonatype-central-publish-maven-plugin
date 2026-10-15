@@ -8,13 +8,21 @@ import static io.github.nodece.sonatype.central.publish.client.api.DeploymentSta
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import io.github.nodece.sonatype.central.publish.client.api.DeploymentState;
 import io.github.nodece.sonatype.central.publish.client.api.DeploymentStatus;
 import io.github.nodece.sonatype.central.publish.client.api.Publisher;
+import io.github.nodece.sonatype.central.publish.client.api.PublishingType;
 import io.github.nodece.sonatype.central.publish.client.internal.HttpResponseException;
+import io.github.nodece.sonatype.central.publish.util.FutureUtils;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -158,5 +166,45 @@ public class PublishMojoTest {
 
         assertThat(future).succeedsWithin(15, TimeUnit.SECONDS).satisfies(n -> assertThat(n.getDeploymentState())
                 .isEqualTo(DeploymentState.PUBLISHED));
+    }
+
+    @Test
+    public void uploadRetriesOnServerError() throws Throwable {
+        Path bundlePath = Paths.get("bundle.zip");
+
+        Response response = mock(Response.class);
+        when(response.getStatusCode()).thenReturn(502);
+        HttpResponseException serverError = new HttpResponseException(response);
+
+        Publisher publisher = mock(Publisher.class);
+        AtomicInteger attempts = new AtomicInteger();
+        when(publisher.upload(anyString(), any(PublishingType.class), any(Path.class)))
+                .thenAnswer(inv -> attempts.getAndIncrement() == 0
+                        ? FutureUtils.<String>failedFuture(serverError)
+                        : completedFuture("deployment-id-123"));
+
+        String deploymentId =
+                PublishMojo.uploadBundle(publisher, "Deployment-test", PublishingType.USER_MANAGED, bundlePath);
+
+        assertThat(deploymentId).isEqualTo("deployment-id-123");
+        assertThat(attempts.get()).isEqualTo(2);
+    }
+
+    @Test
+    public void uploadFailsFastOnClientError() throws Throwable {
+        Path bundlePath = Paths.get("bundle.zip");
+
+        Response response = mock(Response.class);
+        when(response.getStatusCode()).thenReturn(401);
+        HttpResponseException authError = new HttpResponseException(response);
+
+        Publisher publisher = mock(Publisher.class);
+        when(publisher.upload(anyString(), any(PublishingType.class), any(Path.class)))
+                .thenReturn(FutureUtils.<String>failedFuture(authError));
+
+        assertThatThrownBy(() ->
+                        PublishMojo.uploadBundle(publisher, "Deployment-test", PublishingType.USER_MANAGED, bundlePath))
+                .hasCause(authError);
+        verify(publisher, times(1)).upload(anyString(), any(PublishingType.class), any(Path.class));
     }
 }
